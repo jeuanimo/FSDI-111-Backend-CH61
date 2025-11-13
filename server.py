@@ -9,6 +9,18 @@ from flask import Flask, jsonify
 from flask import request
 import sqlite3
 from datetime import date
+from constants import (SQL_SELECT_ALL_USER, 
+                       SQL_DELETE_USER, 
+                       SQL_INSERT_USER, 
+                       SQL_UPDATE_USER,
+                       SQL_SELECT_USER_BY_ID,
+                       SQL_SELECT_ALL_EXPENSES,
+                       SQL_SELECT_EXPENSE_BY_ID,
+                       SQL_INSERT_EXPENSE,
+                       SQL_UPDATE_EXPENSE,
+                       SQL_DELETE_EXPENSE,
+                       VALID_EXPENSE_CATEGORIES)
+from responses import success_response, not_found_response
 
 # Initialize Flask application instance
 app = Flask(__name__)
@@ -72,14 +84,16 @@ def health_check():
     Simple health check endpoint to verify the API is running.
     
     Returns:
-        JSON response with status "healthy" and HTTP 200 status code
+        JSON response with success format and HTTP 200 status code
     
     Example Response:
         {
-            "status": "healthy"
+            "success": true,
+            "message": "API is healthy",
+            "data": null
         }
     """
-    return jsonify({"status": "healthy"}), 200
+    return success_response("API is healthy")
 
 
 # ===================================
@@ -110,15 +124,12 @@ def register_user():
     # Connect to database and insert new user
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()  # Create a cursor object to execute SQL commands
-    cursor.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, password))  # Insert the new user into the users table
+    cursor.execute(SQL_INSERT_USER, (username, password))  # Insert the new user into the users table
     conn.commit()  # Save the changes to the database
     conn.close()  # Close the database connection
 
     # Return success response
-    return jsonify({
-        "success": True,
-        "message": "User registered successfully"
-        }), 201
+    return success_response("User registered successfully")
 
 
 # ===================================
@@ -167,11 +178,11 @@ def login_user():
     # Check if user exists and password matches
     if user and user["password"] == password:
         # Successful authentication - return user data
-        return jsonify({
-            "user_is": user["id"],
-            "username": user["username"],
-            
-        }), 200
+        user_data = {
+            "user_id": user["id"],
+            "username": user["username"]
+        }
+        return success_response("Login successful", user_data)
     else:   
         # Invalid credentials - return error
         return jsonify({
@@ -209,23 +220,22 @@ def get_user(user_id):
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row  # Enable dictionary-like access to rows
     cursor = conn.cursor()  # Create a cursor object to execute SQL commands
-    cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))  # Query the users table for the provided user_id
+    cursor.execute(SQL_SELECT_USER_BY_ID, (user_id,))  # Query the users table for the provided user_id
     user = cursor.fetchone()  # Get the user record
     conn.close()  # Close database connection
 
     # Check if user exists and return appropriate response
     if user:
         # User found - return user data (excluding password for security)
-        return jsonify({
+        user_data = {
             "id": user["id"],
             "username": user["username"]
-        }), 200
+        }
+        return success_response("User retrieved successfully", user_data)
     else:
         # User not found - return error
-        return jsonify({
-            "success": False,
-            "message": "User not found"
-        }), 404
+        return not_found_response("User")
+          
 # ===================================
 # UPDATE USER BY ID ENDPOINT
 # ===================================
@@ -269,24 +279,18 @@ def update_user(user_id):
     cursor = conn.cursor()
 
     # First, check if the user exists
-    cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+    cursor.execute(SQL_SELECT_USER_BY_ID, (user_id,))
     if not cursor.fetchone():
         conn.close()
-        return jsonify({
-            "success": False,
-            "message": "User not found"
-        }), 404
+        return not_found_response("User")
 
     # User exists, proceed with update
-    cursor.execute("UPDATE users SET username = ?, password = ? WHERE id = ?", (username, password, user_id))
+    cursor.execute(SQL_UPDATE_USER, (username, password, user_id))
     conn.commit()  # Save the changes to the database
     conn.close()  # Close database connection
 
     # Return success response
-    return jsonify({
-        "success": True,
-        "message": "User updated successfully"
-    }), 200
+    return success_response("User updated successfully")
 
 # ===================================
 # DELETE USER BY ID ENDPOINT
@@ -322,24 +326,18 @@ def delete_user(user_id):
     cursor = conn.cursor()
 
     # First, check if the user exists
-    cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+    cursor.execute(SQL_SELECT_USER_BY_ID, (user_id,))
     if not cursor.fetchone():
         conn.close()
-        return jsonify({
-            "success": False,
-            "message": "User not found"
-        }), 404
+        return not_found_response("User")
 
     # User exists, proceed with deletion
-    cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    cursor.execute(SQL_DELETE_USER, (user_id,))
     conn.commit()  # Save the changes to the database
     conn.close()  # Close database connection
 
     # Return success response
-    return jsonify({
-        "success": True,
-        "message": "User Deleted successfully"
-    }), 200
+    return success_response("User deleted successfully")
 
 
 # ===================================
@@ -380,7 +378,7 @@ def get_users():
     cursor = conn.cursor()  # Create a cursor object to execute SQL commands
     
     # Execute query to get all users
-    cursor.execute("SELECT * FROM users")
+    cursor.execute(SQL_SELECT_ALL_USER)
     rows = cursor.fetchall()  # Retrieve all user records
     conn.close()  # Close database connection
 
@@ -389,46 +387,273 @@ def get_users():
     for row in rows:
         user = {
             "id": row["id"],
-            "username": row["username"],
-            "password": row["password"]  # Note: In production, exclude passwords for security
+            "username": row["username"]
         }
         users.append(user)
     
     # Return success response with user data
-    return jsonify({
-        "success": True,
-        "message": "Users retrieved successfully",
-        "data": users
-    }), 200
+    return success_response("Users retrieved successfully", users)
 
 
-#----EXpenses------------
+# ===================================
+# EXPENSES CRUD ENDPOINTS
+# ===================================
+
+# ===================================
+# GET ALL EXPENSES ENDPOINT
+# ===================================
+@app.get("/api/expenses")
+def get_all_expenses():
+    """
+    Retrieve all expenses from the system.
+    
+    Returns:
+        - HTTP 200: Successfully retrieved all expenses
+        - JSON response with list of all expenses
+    
+    Example Success Response:
+        {
+            "success": true,
+            "message": "Expenses retrieved successfully",
+            "data": [
+                {
+                    "id": 1,
+                    "user_id": 1,
+                    "title": "Lunch",
+                    "amount": "25.50",
+                    "category": "Food",
+                    "date": "2025-11-12",
+                    "description": "Business lunch meeting"
+                }
+            ]
+        }
+    """
+    # Connect to database
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row  # Enable dictionary-like access to rows
+    cursor = conn.cursor()
+    
+    # Execute query to get all expenses
+    cursor.execute(SQL_SELECT_ALL_EXPENSES)
+    rows = cursor.fetchall()
+    conn.close()
+
+    # Convert database rows to list of dictionaries
+    expenses = []
+    for row in rows:
+        expense = {
+            "id": row["id"],
+            "user_id": row["user_id"],
+            "title": row["title"],
+            "amount": row["amount"],
+            "category": row["category"],
+            "date": row["date"],
+            "description": row["description"]
+        }
+        expenses.append(expense)
+    
+    return success_response("Expenses retrieved successfully", expenses)
+
+
+# ===================================
+# GET EXPENSE BY ID ENDPOINT
+# ===================================
+@app.get("/api/expenses/<int:expense_id>")
+def get_expense(expense_id):
+    """
+    Retrieve a specific expense by its ID.
+    
+    URL Parameters:
+        expense_id (int): The unique identifier of the expense
+    
+    Returns:
+        - HTTP 200: Expense found, returns expense data
+        - HTTP 404: Expense not found
+    
+    Example Success Response:
+        {
+            "success": true,
+            "message": "Expense retrieved successfully",
+            "data": {
+                "id": 1,
+                "user_id": 1,
+                "title": "Lunch",
+                "amount": "25.50",
+                "category": "Food",
+                "date": "2025-11-12",
+                "description": "Business lunch meeting"
+            }
+        }
+    """
+    # Connect to database and search for expense by ID
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(SQL_SELECT_EXPENSE_BY_ID, (expense_id,))
+    expense = cursor.fetchone()
+    conn.close()
+
+    # Check if expense exists and return appropriate response
+    if expense:
+        expense_data = {
+            "id": expense["id"],
+            "user_id": expense["user_id"],
+            "title": expense["title"],
+            "amount": expense["amount"],
+            "category": expense["category"],
+            "date": expense["date"],
+            "description": expense["description"]
+        }
+        return success_response("Expense retrieved successfully", expense_data)
+    else:
+        return not_found_response("Expense")
+
+
+# ===================================
+# CREATE EXPENSE ENDPOINT
+# ===================================
 @app.post("/api/expenses")
-def create_expense(): 
-    data=request.get_json()
-    title=data.get("title")
-    description=data.get("description")
-    amount=data.get("amount")
-    date_str=date.today()
-    category=data.get("category")
-    user_id=data.get("user_id")
+def create_expense():
+    """
+    Create a new expense in the system.
+    
+    Expected JSON Request Body:
+        {
+            "title": "string",
+            "description": "string",
+            "amount": "string",
+            "category": "Food|Education|Entertainment",
+            "user_id": integer
+        }
+    
+    Returns:
+        - HTTP 200: Successfully created expense
+        - HTTP 400: Invalid category or missing data
+    
+    Note: Date is automatically set to today's date
+    """
+    data = request.get_json()
+    title = data.get("title")
+    description = data.get("description")
+    amount = data.get("amount")
+    category = data.get("category")
+    user_id = data.get("user_id")
+    date_str = date.today()
 
-    conn=sqlite3.connect(DB_NAME)
-    cursor=conn.cursor()
+    # Validate category
+    if category not in VALID_EXPENSE_CATEGORIES:
+        return jsonify({
+            "success": False,
+            "message": f"Invalid category. Must be one of: {', '.join(VALID_EXPENSE_CATEGORIES)}"
+        }), 400
 
-    cursor.execute('''
-        INSERT INTO expenses (title, description, amount, date, category, user_id)
-        VALUES (?, ?, ?, ?, ?, ?)
-    ''', (title, description, amount, date_str, category, user_id))
-
+    # Connect to database and insert new expense
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute(SQL_INSERT_EXPENSE, (user_id, title, amount, category, date_str, description))
     conn.commit()
     conn.close()
 
-    return jsonify({
-        "success": True,
-        "message": "Expense created successfully"
-    }), 201
+    return success_response("Expense created successfully")
 
+
+# ===================================
+# UPDATE EXPENSE ENDPOINT
+# ===================================
+@app.put("/api/expenses/<int:expense_id>")
+def update_expense(expense_id):
+    """
+    Update an existing expense by its ID.
+    
+    URL Parameters:
+        expense_id (int): The unique identifier of the expense to update
+    
+    Expected JSON Request Body:
+        {
+            "title": "string" (optional),
+            "description": "string" (optional),
+            "amount": "string" (optional),
+            "category": "Food|Education|Entertainment" (optional),
+            "user_id": integer (optional)
+        }
+    
+    Returns:
+        - HTTP 200: Expense successfully updated
+        - HTTP 404: Expense not found
+        - HTTP 400: Invalid category
+    """
+    data = request.get_json()
+    
+    # Validate category if provided
+    category = data.get("category")
+    if category and category not in VALID_EXPENSE_CATEGORIES:
+        return jsonify({
+            "success": False,
+            "message": f"Invalid category. Must be one of: {', '.join(VALID_EXPENSE_CATEGORIES)}"
+        }), 400
+
+    # Connect to database
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    # First, check if the expense exists and get current data
+    cursor.execute(SQL_SELECT_EXPENSE_BY_ID, (expense_id,))
+    existing_expense = cursor.fetchone()
+    
+    if not existing_expense:
+        conn.close()
+        return not_found_response("Expense")
+
+    # Use existing values if new ones aren't provided
+    user_id = data.get("user_id", existing_expense["user_id"])
+    title = data.get("title", existing_expense["title"])
+    amount = data.get("amount", existing_expense["amount"])
+    category = data.get("category", existing_expense["category"])
+    description = data.get("description", existing_expense["description"])
+    date_str = existing_expense["date"]  # Keep original date
+
+    # Update the expense
+    cursor.execute(SQL_UPDATE_EXPENSE, (user_id, title, amount, category, date_str, description, expense_id))
+    conn.commit()
+    conn.close()
+
+    return success_response("Expense updated successfully")
+
+
+# ===================================
+# DELETE EXPENSE ENDPOINT
+# ===================================
+@app.delete("/api/expenses/<int:expense_id>")
+def delete_expense(expense_id):
+    """
+    Delete an expense from the system by its ID.
+    
+    URL Parameters:
+        expense_id (int): The unique identifier of the expense to delete
+    
+    Returns:
+        - HTTP 200: Expense successfully deleted
+        - HTTP 404: Expense not found
+    
+    Warning: This operation is irreversible. The expense data will be permanently removed.
+    """
+    # Connect to database
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    # First, check if the expense exists
+    cursor.execute(SQL_SELECT_EXPENSE_BY_ID, (expense_id,))
+    if not cursor.fetchone():
+        conn.close()
+        return not_found_response("Expense")
+
+    # Expense exists, proceed with deletion
+    cursor.execute(SQL_DELETE_EXPENSE, (expense_id,))
+    conn.commit()
+    conn.close()
+
+    return success_response("Expense deleted successfully")
 
 
 # ===================================
