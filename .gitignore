@@ -258,3 +258,6 @@ logs/
 # Temporary files
 tmp/
 temp/
+# Local database (created automatically by server.py)
+*.db
+*.sqlite3
